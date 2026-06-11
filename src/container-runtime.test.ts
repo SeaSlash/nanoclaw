@@ -46,10 +46,23 @@ describe('readonlyMountArgs', () => {
 });
 
 describe('stopContainer', () => {
-  it('returns stop command using CONTAINER_RUNTIME_BIN', () => {
-    expect(stopContainer('nanoclaw-test-123')).toBe(
-      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-test-123`,
+  it('calls docker stop for valid container names', () => {
+    stopContainer('nanoclaw-test-123');
+    expect(mockExecSync).toHaveBeenCalledWith(
+      `${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-test-123`,
+      { stdio: 'pipe' },
     );
+  });
+
+  it('rejects names with shell metacharacters', () => {
+    expect(() => stopContainer('foo; rm -rf /')).toThrow(
+      'Invalid container name',
+    );
+    expect(() => stopContainer('foo$(whoami)')).toThrow(
+      'Invalid container name',
+    );
+    expect(() => stopContainer('foo`id`')).toThrow('Invalid container name');
+    expect(mockExecSync).not.toHaveBeenCalled();
   });
 });
 
@@ -152,12 +165,12 @@ describe('cleanupOrphans', () => {
     expect(mockExecSync).toHaveBeenCalledTimes(3);
     expect(mockExecSync).toHaveBeenNthCalledWith(
       2,
-      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group1-111`,
+      `${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-group1-111`,
       { stdio: 'pipe' },
     );
     expect(mockExecSync).toHaveBeenNthCalledWith(
       3,
-      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group3-333`,
+      `${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-group3-333`,
       { stdio: 'pipe' },
     );
     expect(logger.info).toHaveBeenCalledWith(
@@ -240,12 +253,12 @@ describe('cleanupOrphans', () => {
     expect(mockExecSync).toHaveBeenCalledTimes(3);
     expect(mockExecSync).toHaveBeenNthCalledWith(
       2,
-      `${CONTAINER_RUNTIME_BIN} stop custom-managed-container`,
+      `${CONTAINER_RUNTIME_BIN} stop -t 1 custom-managed-container`,
       { stdio: 'pipe' },
     );
     expect(mockExecSync).toHaveBeenNthCalledWith(
       3,
-      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-legacy-456`,
+      `${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-legacy-456`,
       { stdio: 'pipe' },
     );
   });
