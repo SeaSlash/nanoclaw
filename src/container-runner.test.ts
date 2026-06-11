@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { spawn } from 'child_process';
 import { PassThrough } from 'stream';
 
 // Sentinel markers must match container-runner.ts
@@ -87,6 +88,7 @@ vi.mock('child_process', async () => {
 });
 
 import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import { NANOCLAW_MANAGED_LABEL } from './container-runtime.js';
 import type { RegisteredGroup } from './types.js';
 
 const testGroup: RegisteredGroup = {
@@ -206,5 +208,27 @@ describe('container-runner timeout behavior', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+
+  it('passes Apple Container networking env and management labels', async () => {
+    delete process.env.NODE_OPTIONS;
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const spawnArgs = vi.mocked(spawn).mock.calls[0]?.[1] as string[];
+
+    expect(spawnArgs).toContain('-l');
+    expect(spawnArgs).toContain(`${NANOCLAW_MANAGED_LABEL}=true`);
+    expect(spawnArgs).toContain('-e');
+    expect(spawnArgs).toContain('NODE_OPTIONS=--dns-result-order=ipv4first');
+
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Done',
+    });
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
   });
 });

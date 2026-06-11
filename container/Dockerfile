@@ -6,8 +6,11 @@ FROM node:22-slim
 # Install system dependencies for Chromium
 RUN apt-get update && apt-get install -y \
     chromium \
+    ffmpeg \
     fonts-liberation \
     fonts-noto-color-emoji \
+    python3 \
+    python3-pil \
     libgbm1 \
     libnss3 \
     libatk-bridge2.0-0 \
@@ -28,6 +31,7 @@ RUN apt-get update && apt-get install -y \
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+ENV NODE_OPTIONS=--dns-result-order=ipv4first
 
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code

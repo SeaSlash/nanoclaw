@@ -70,7 +70,7 @@ Real API credentials **never enter containers**. Instead, the host runs an HTTP 
 
 **How it works:**
 1. Host starts a credential proxy on `CREDENTIAL_PROXY_PORT` (default: 3001)
-2. Containers receive `ANTHROPIC_BASE_URL=http://host.docker.internal:<port>` and `ANTHROPIC_API_KEY=placeholder`
+2. Containers receive `ANTHROPIC_BASE_URL=http://<runtime-host-gateway>:<port>` and `ANTHROPIC_API_KEY=placeholder`
 3. The SDK sends API requests to the proxy with the placeholder key
 4. The proxy strips placeholder auth, injects real credentials (`x-api-key` or `Authorization: Bearer`), and forwards to `api.anthropic.com`
 5. Agents cannot discover real credentials — not in environment, stdin, files, or `/proc`

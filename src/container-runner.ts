@@ -21,6 +21,7 @@ import { logger } from './logger.js';
 import {
   CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
+  NANOCLAW_MANAGED_LABEL,
   hostGatewayArgs,
   readonlyMountArgs,
   stopContainer,
@@ -78,14 +79,8 @@ function buildVolumeMounts(
 
     // Shadow .env so the agent cannot read secrets from the mounted project root.
     // Credentials are injected by the credential proxy, never exposed to containers.
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      mounts.push({
-        hostPath: '/dev/null',
-        containerPath: '/workspace/project/.env',
-        readonly: true,
-      });
-    }
+    // NOTE: Skipped for Apple Container — file-over-file mounts not supported.
+    // The project root is mounted read-only, so .env cannot be modified anyway.
 
     // Main also gets its group folder as the working directory
     mounts.push({
@@ -219,8 +214,25 @@ function buildContainerArgs(
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
+  args.push('-l', `${NANOCLAW_MANAGED_LABEL}=true`);
+
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Apple Container networking is IPv4-only once NAT is enabled on macOS.
+  // Prefer IPv4 responses so Node doesn't hang on unreachable AAAA records.
+  const existingNodeOptions = process.env.NODE_OPTIONS?.trim();
+  const dnsResultOrderFlag = '--dns-result-order=ipv4first';
+  if (existingNodeOptions?.includes('--dns-result-order=')) {
+    args.push('-e', `NODE_OPTIONS=${existingNodeOptions}`);
+  } else if (existingNodeOptions) {
+    args.push(
+      '-e',
+      `NODE_OPTIONS=${existingNodeOptions} ${dnsResultOrderFlag}`,
+    );
+  } else {
+    args.push('-e', `NODE_OPTIONS=${dnsResultOrderFlag}`);
+  }
 
   // Route API traffic through the credential proxy (containers never see real secrets)
   args.push(

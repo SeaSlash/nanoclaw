@@ -1,4 +1,13 @@
-import { Client, Events, GatewayIntentBits, Message, TextChannel } from 'discord.js';
+import {
+  AttachmentBuilder,
+  Client,
+  Events,
+  GatewayIntentBits,
+  Message,
+  TextChannel,
+} from 'discord.js';
+import * as fs from 'fs';
+import * as path from 'path';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
@@ -88,18 +97,20 @@ export class DiscordChannel implements Channel {
 
       // Handle attachments — store placeholders so the agent knows something was sent
       if (message.attachments.size > 0) {
-        const attachmentDescriptions = [...message.attachments.values()].map((att) => {
-          const contentType = att.contentType || '';
-          if (contentType.startsWith('image/')) {
-            return `[Image: ${att.name || 'image'}]`;
-          } else if (contentType.startsWith('video/')) {
-            return `[Video: ${att.name || 'video'}]`;
-          } else if (contentType.startsWith('audio/')) {
-            return `[Audio: ${att.name || 'audio'}]`;
-          } else {
-            return `[File: ${att.name || 'file'}]`;
-          }
-        });
+        const attachmentDescriptions = [...message.attachments.values()].map(
+          (att) => {
+            const contentType = att.contentType || '';
+            if (contentType.startsWith('image/')) {
+              return `[Image: ${att.name || 'image'}]`;
+            } else if (contentType.startsWith('video/')) {
+              return `[Video: ${att.name || 'video'}]`;
+            } else if (contentType.startsWith('audio/')) {
+              return `[Audio: ${att.name || 'audio'}]`;
+            } else {
+              return `[File: ${att.name || 'file'}]`;
+            }
+          },
+        );
         if (content) {
           content = `${content}\n${attachmentDescriptions.join('\n')}`;
         } else {
@@ -125,7 +136,13 @@ export class DiscordChannel implements Channel {
 
       // Store chat metadata for discovery
       const isGroup = message.guild !== null;
-      this.opts.onChatMetadata(chatJid, timestamp, chatName, 'discord', isGroup);
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        chatName,
+        'discord',
+        isGroup,
+      );
 
       // Only deliver full message for registered groups
       const group = this.opts.registeredGroups()[chatJid];
@@ -177,35 +194,40 @@ export class DiscordChannel implements Channel {
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {
-    if (!this.client) {
-      logger.warn('Discord client not initialized');
-      return;
-    }
-
+    if (!this.client) { logger.warn("Discord client not initialized"); return; }
     try {
-      const channelId = jid.replace(/^dc:/, '');
+      const channelId = jid.replace(/^dc:/, "");
       const channel = await this.client.channels.fetch(channelId);
-
-      if (!channel || !('send' in channel)) {
-        logger.warn({ jid }, 'Discord channel not found or not text-based');
-        return;
-      }
-
+      if (!channel || !("send" in channel)) { logger.warn({ jid }, "Discord channel not found"); return; }
       const textChannel = channel as TextChannel;
-
-      // Discord has a 2000 character limit per message — split if needed
-      const MAX_LENGTH = 2000;
-      if (text.length <= MAX_LENGTH) {
-        await textChannel.send(text);
-      } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await textChannel.send(text.slice(i, i + MAX_LENGTH));
-        }
+      const lines = text.split("\n");
+      const textLines: string[] = [];
+      const fileAttachments: AttachmentBuilder[] = [];
+      const projectRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..");
+      const groupsDir = path.join(projectRoot, "groups");
+      let groupFolder = "";
+      try { const groups = this.opts.registeredGroups(); const g = groups[jid]; if (g) groupFolder = g.folder; } catch {}
+      for (const line of lines) {
+        const m = line.match(/^MEDIA:(.+)$/);
+        if (m) {
+          let fp = m[1].trim();
+          if (fp.startsWith("/workspace/group/") && groupFolder) { fp = fp.replace("/workspace/group/", groupsDir + "/" + groupFolder + "/"); }
+          if (fs.existsSync(fp)) { fileAttachments.push(new AttachmentBuilder(fp, { name: path.basename(fp) })); logger.info({ fp }, "Discord attachment queued"); }
+          else { textLines.push("[File not found: " + fp + "]"); }
+        } else { textLines.push(line); }
       }
-      logger.info({ jid, length: text.length }, 'Discord message sent');
-    } catch (err) {
-      logger.error({ jid, err }, 'Failed to send Discord message');
-    }
+      const cleanText = textLines.join("\n").trim();
+      const MAX_LENGTH = 2000;
+      if (fileAttachments.length > 0) {
+        const msgContent = cleanText.length > 0 ? cleanText.slice(0, MAX_LENGTH) : undefined;
+        await textChannel.send({ content: msgContent, files: fileAttachments.slice(0, 10) });
+        for (let i = 10; i < fileAttachments.length; i += 10) { await textChannel.send({ files: fileAttachments.slice(i, i + 10) }); }
+      } else if (cleanText.length > 0) {
+        if (cleanText.length <= MAX_LENGTH) { await textChannel.send(cleanText); }
+        else { for (let i = 0; i < cleanText.length; i += MAX_LENGTH) { await textChannel.send(cleanText.slice(i, i + MAX_LENGTH)); } }
+      }
+      logger.info({ jid, length: text.length, attachments: fileAttachments.length }, "Discord message sent");
+    } catch (err) { logger.error({ jid, err }, "Failed to send Discord message"); }
   }
 
   isConnected(): boolean {

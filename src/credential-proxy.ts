@@ -25,7 +25,7 @@ export interface ProxyConfig {
 
 export function startCredentialProxy(
   port: number,
-  host = '127.0.0.1',
+  host = '0.0.0.0',
 ): Promise<Server> {
   const secrets = readEnvFile([
     'ANTHROPIC_API_KEY',
