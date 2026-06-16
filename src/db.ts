@@ -100,6 +100,20 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add opt-in retry/backoff columns (migration for existing DBs).
+  // max_retries defaults to 0 so existing tasks keep today's no-retry behavior.
+  for (const ddl of [
+    `ALTER TABLE scheduled_tasks ADD COLUMN retry_count INTEGER DEFAULT 0`,
+    `ALTER TABLE scheduled_tasks ADD COLUMN max_retries INTEGER DEFAULT 0`,
+    `ALTER TABLE scheduled_tasks ADD COLUMN retry_base_ms INTEGER DEFAULT 60000`,
+  ]) {
+    try {
+      database.exec(ddl);
+    } catch {
+      /* column already exists */
+    }
+  }
+
   // Add is_bot_message column if it doesn't exist (migration for existing DBs)
   try {
     database.exec(
@@ -533,6 +547,59 @@ export function updateTaskAfterRun(
     WHERE id = ?
   `,
   ).run(nextRun, now, lastResult, nextRun, id);
+}
+
+/**
+ * Re-arm a failed task for a retry: set next_run to the backoff time and bump
+ * retry_count. Keeps status 'active' so the normal due-task poll re-runs it.
+ * Does not touch last_run/last_result — the run was already recorded by logTaskRun.
+ */
+export function scheduleTaskRetry(
+  id: string,
+  retryAt: string,
+  retryCount: number,
+): void {
+  db.prepare(
+    `UPDATE scheduled_tasks SET next_run = ?, retry_count = ? WHERE id = ?`,
+  ).run(retryAt, retryCount, id);
+}
+
+/** Reset the retry counter after a clean run (or exhausted retries). */
+export function resetRetryCount(id: string): void {
+  db.prepare(`UPDATE scheduled_tasks SET retry_count = 0 WHERE id = ?`).run(id);
+}
+
+/**
+ * Delete completed one-shot tasks whose last_run is older than the cutoff,
+ * along with their task_run_logs (FK-safe: child rows first). Returns the count
+ * of tasks removed. Only touches status='completed' rows — active/paused/
+ * recurring tasks are never deleted.
+ */
+export function pruneCompletedTasks(olderThanMs: number): number {
+  const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+  const stale = db
+    .prepare(
+      `SELECT id FROM scheduled_tasks
+        WHERE status = 'completed' AND (last_run IS NULL OR last_run < ?)`,
+    )
+    .all(cutoff) as { id: string }[];
+  const purge = db.transaction((rows: { id: string }[]) => {
+    for (const { id } of rows) {
+      db.prepare('DELETE FROM task_run_logs WHERE task_id = ?').run(id);
+      db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
+    }
+  });
+  purge(stale);
+  return stale.length;
+}
+
+/** Delete task_run_logs older than the cutoff. Returns the number removed. */
+export function pruneOldTaskRunLogs(olderThanMs: number): number {
+  const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+  const info = db
+    .prepare(`DELETE FROM task_run_logs WHERE run_at < ?`)
+    .run(cutoff);
+  return info.changes;
 }
 
 export function logTaskRun(log: TaskRunLog): void {

@@ -71,6 +71,10 @@ export interface ScheduledTask {
   last_result: string | null;
   status: 'active' | 'paused' | 'completed';
   created_at: string;
+  // Opt-in retry/backoff (default max_retries=0 => no retry, preserves prior behavior).
+  retry_count?: number;
+  max_retries?: number;
+  retry_base_ms?: number;
 }
 
 export interface TaskRunLog {

@@ -2,7 +2,14 @@ import { ChildProcess } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
-import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  ASSISTANT_NAME,
+  SCHEDULER_MAX_CATCHUP_PER_TICK,
+  SCHEDULER_POLL_INTERVAL,
+  TASK_LOG_RETENTION_MS,
+  TASK_RETENTION_MS,
+  TIMEZONE,
+} from './config.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -13,6 +20,10 @@ import {
   getDueTasks,
   getTaskById,
   logTaskRun,
+  pruneCompletedTasks,
+  pruneOldTaskRunLogs,
+  resetRetryCount,
+  scheduleTaskRetry,
   updateTask,
   updateTaskAfterRun,
 } from './db.js';
@@ -75,7 +86,23 @@ export interface SchedulerDependencies {
   sendMessage: (jid: string, text: string) => Promise<void>;
 }
 
+// Process-wide overlap guard: task ids currently enqueued-or-running. The
+// scheduler skips re-enqueuing a task that is still in flight, so a task whose
+// runtime exceeds its interval never double-runs. Cleared in runTask's finally.
+const runningTasks = new Set<string>();
+
 async function runTask(
+  task: ScheduledTask,
+  deps: SchedulerDependencies,
+): Promise<void> {
+  try {
+    await runTaskInner(task, deps);
+  } finally {
+    runningTasks.delete(task.id);
+  }
+}
+
+async function runTaskInner(
   task: ScheduledTask,
   deps: SchedulerDependencies,
 ): Promise<void> {
@@ -231,6 +258,35 @@ async function runTask(
     error,
   });
 
+  // Retry/backoff (opt-in). A failure is keyed strictly on `error` (set only when
+  // the container reported status='error' or threw) — NOT on a null result, since
+  // a gate that returns wakeAgent:false legitimately produces result:null.
+  const maxRetries = task.max_retries ?? 0;
+  const retryCount = task.retry_count ?? 0;
+  if (error && retryCount < maxRetries) {
+    const baseMs = task.retry_base_ms ?? 60_000;
+    const nextRetryCount = retryCount + 1;
+    const backoffMs = baseMs * Math.pow(2, retryCount); // 1x, 2x, 4x, ...
+    const retryAt = new Date(Date.now() + backoffMs);
+    const scheduled = computeNextRun(task);
+    // Only retry if the backoff lands before the next scheduled run; otherwise
+    // let the normal schedule take over.
+    if (!scheduled || retryAt.getTime() < new Date(scheduled).getTime()) {
+      scheduleTaskRetry(task.id, retryAt.toISOString(), nextRetryCount);
+      logger.warn(
+        {
+          taskId: task.id,
+          attempt: nextRetryCount,
+          maxRetries,
+          backoffMs,
+          error,
+        },
+        'Scheduled task failed; retrying with backoff',
+      );
+      return;
+    }
+  }
+
   const nextRun = computeNextRun(task);
   const resultSummary = error
     ? `Error: ${error}`
@@ -238,6 +294,10 @@ async function runTask(
       ? result.slice(0, 200)
       : 'Completed';
   updateTaskAfterRun(task.id, nextRun, resultSummary);
+  // Clear any prior retry state after a clean run (or exhausted retries).
+  if (retryCount > 0) {
+    resetRetryCount(task.id);
+  }
 }
 
 let schedulerRunning = false;
@@ -250,9 +310,35 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
   schedulerRunning = true;
   logger.info('Scheduler loop started');
 
+  const PRUNE_INTERVAL_MS = 60 * 60 * 1000; // sweep retention roughly hourly
+  let lastPruneAt = 0;
+
   const loop = async () => {
     try {
-      const dueTasks = getDueTasks();
+      // Periodic retention sweep: drop old completed one-shot tasks and stale
+      // run logs so the table doesn't grow unbounded (the */5 poll alone writes
+      // ~288 log rows/day). Guarded so it runs ~hourly, not every tick.
+      const now = Date.now();
+      if (now - lastPruneAt >= PRUNE_INTERVAL_MS) {
+        lastPruneAt = now;
+        try {
+          const prunedTasks = pruneCompletedTasks(TASK_RETENTION_MS);
+          const prunedLogs = pruneOldTaskRunLogs(TASK_LOG_RETENTION_MS);
+          if (prunedTasks > 0 || prunedLogs > 0) {
+            logger.info(
+              { prunedTasks, prunedLogs },
+              'Pruned old completed tasks and run logs',
+            );
+          }
+        } catch (err) {
+          logger.error({ err }, 'Retention sweep failed');
+        }
+      }
+
+      // Cap catch-up per tick so a post-downtime backlog drains over several
+      // ticks instead of slamming the queue all at once. computeNextRun already
+      // coalesces missed windows, so remaining overdue tasks fire on later ticks.
+      const dueTasks = getDueTasks().slice(0, SCHEDULER_MAX_CATCHUP_PER_TICK);
       if (dueTasks.length > 0) {
         logger.info({ count: dueTasks.length }, 'Found due tasks');
       }
@@ -264,6 +350,16 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
           continue;
         }
 
+        // Overlap guard: skip a task whose previous run is still in flight.
+        if (runningTasks.has(currentTask.id)) {
+          logger.debug(
+            { taskId: currentTask.id },
+            'Previous run still in flight, deferring (overlap)',
+          );
+          continue;
+        }
+
+        runningTasks.add(currentTask.id);
         deps.queue.enqueueTask(currentTask.chat_jid, currentTask.id, () =>
           runTask(currentTask, deps),
         );

@@ -61,6 +61,23 @@ export const MAX_CONCURRENT_CONTAINERS = Math.max(
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
 );
 
+// Scheduler robustness knobs.
+// Cap how many overdue tasks the scheduler enqueues per tick so a post-downtime
+// backlog drains over several ticks instead of slamming the container queue.
+export const SCHEDULER_MAX_CATCHUP_PER_TICK = Math.max(
+  1,
+  parseInt(process.env.SCHEDULER_MAX_CATCHUP_PER_TICK || '5', 10) || 5,
+);
+// Retention: completed one-shot tasks and old run logs are pruned by the scheduler.
+export const TASK_RETENTION_MS = parseInt(
+  process.env.TASK_RETENTION_MS || String(7 * 24 * 60 * 60 * 1000),
+  10,
+); // 7 days — how long to keep completed `once` tasks before deletion
+export const TASK_LOG_RETENTION_MS = parseInt(
+  process.env.TASK_LOG_RETENTION_MS || String(30 * 24 * 60 * 60 * 1000),
+  10,
+); // 30 days — how long to keep task_run_logs rows
+
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
