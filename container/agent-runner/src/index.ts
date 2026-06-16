@@ -20,6 +20,7 @@ import { execFile } from 'child_process';
 import {
   query,
   HookCallback,
+  McpServerConfig,
   PreCompactHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
@@ -435,6 +436,63 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  const allowedTools = [
+    'Bash',
+    'Read',
+    'Write',
+    'Edit',
+    'Glob',
+    'Grep',
+    'WebSearch',
+    'WebFetch',
+    'Task',
+    'TaskOutput',
+    'TaskStop',
+    'TeamCreate',
+    'TeamDelete',
+    'SendMessage',
+    'TodoWrite',
+    'ToolSearch',
+    'Skill',
+    'NotebookEdit',
+    'mcp__nanoclaw__*',
+  ];
+  const mcpServers: Record<string, McpServerConfig> = {
+    nanoclaw: {
+      command: 'node',
+      args: [mcpServerPath],
+      env: {
+        NANOCLAW_CHAT_JID: containerInput.chatJid,
+        NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+        NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+      },
+    },
+  };
+
+  // Optional remote MCP server (Oslo dashboard, ~30 action tools). Registered ONLY
+  // for groups whose mounted folder contains .oslo-mcp.json — natural per-group
+  // scoping. The full-privilege master secret is delivered via that gitignored
+  // file (same trust boundary as the group's CLAUDE.md, which already holds it);
+  // containers get no host env vars, so it can't come from process.env. Deleting
+  // the file disables oslo with no code change. A bad/unreachable URL only means
+  // the tools are absent — it does not abort the agent.
+  try {
+    const osloSecret = JSON.parse(
+      fs.readFileSync('/workspace/group/.oslo-mcp.json', 'utf-8'),
+    ).secret;
+    if (typeof osloSecret === 'string' && osloSecret.length > 0) {
+      mcpServers.oslo = {
+        type: 'http',
+        url: 'https://www.stephanesimon.cloud/api/integrations/openclaw/mcp/mcp',
+        headers: { Authorization: `Bearer ${osloSecret}` },
+      };
+      allowedTools.push('mcp__oslo__*');
+      log('Registered oslo remote MCP server (mcp__oslo__* enabled)');
+    }
+  } catch {
+    /* no oslo config for this group — skip */
+  }
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -449,42 +507,12 @@ async function runQuery(
             append: globalClaudeMd,
           }
         : undefined,
-      allowedTools: [
-        'Bash',
-        'Read',
-        'Write',
-        'Edit',
-        'Glob',
-        'Grep',
-        'WebSearch',
-        'WebFetch',
-        'Task',
-        'TaskOutput',
-        'TaskStop',
-        'TeamCreate',
-        'TeamDelete',
-        'SendMessage',
-        'TodoWrite',
-        'ToolSearch',
-        'Skill',
-        'NotebookEdit',
-        'mcp__nanoclaw__*',
-      ],
+      allowedTools,
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
-          },
-        },
-      },
+      mcpServers,
       hooks: {
         PreCompact: [
           { hooks: [createPreCompactHook(containerInput.assistantName)] },
