@@ -46,7 +46,8 @@ ${DELIVERY}
 
 1. Call mcp__oslo__get_brief to fetch today's tasks (overdue / due today), Google Calendar events, today's shift, unread email & social counts, bookings, and weather. If you need shift timing detail, also call mcp__oslo__get_shifts for today.
 2. Compose ONE concise brief, UNDER ~1800 characters (Discord splits anything over 2000). Use the "AM Brief Format" in your CLAUDE.md. Lead with time-sensitive items (overdue / due-today tasks, today's shift, calendar conflicts), then unread counts, then weather. Build bullets ONLY from the returned data — do not invent.
-3. READ-ONLY routine: do NOT send any email/SMS/social reply, do NOT modify tasks or shifts, do NOT call any send_* / set_* / reschedule_* tool. End by offering next actions, e.g. "Want me to draft replies or reschedule anything?"
+3. SCHEDULE CONFLICT CHECK (today): if today is a working shift, follow the "Schedule Awareness" procedure in your CLAUDE.md — call mcp__oslo__find_shift_conflicts for today AND also look at home-required tasks due today (bins, deliveries, home chores, home maintenance) that fall in away hours (find_shift_conflicts only catches tasks that have a scheduledStart time). If any, add a short "⚠️ Schedule conflicts" block naming each task, the conflict, and a suggested at-home time (or a day off). If none, omit the block.
+4. READ-ONLY routine: do NOT send any email/SMS/social reply, do NOT modify tasks or shifts, do NOT call any send_* / set_* / reschedule_* tool — for conflicts only SUGGEST a time and ask. End by offering next actions, e.g. "Want me to move the blue bin to 7:30pm, or draft replies?"
 
 If get_brief errors, do not post a broken brief — reply with only <internal>brief failed: …</internal> so nothing is posted (it runs again tomorrow).`,
   },
@@ -61,7 +62,8 @@ ${DELIVERY}
 
 1. Call mcp__oslo__wrap_up (READ-ONLY) to get today's & tomorrow's shift plus open overdue + due-today tasks (rollover candidates).
 2. Compose ONE concise recap, UNDER ~1800 characters: what's still open (overdue / due today), tomorrow's shift, and which tasks look like rollover candidates. Build only from the returned data.
-3. READ-ONLY routine: do NOT actually roll anything forward — do NOT call reschedule_tasks, and do NOT call any send_* / set_* tool. End by asking, e.g. "Want me to roll any of these to tomorrow?" (Steph confirms first.)
+3. SCHEDULE CONFLICT CHECK (tomorrow): if tomorrow is a working shift, follow the "Schedule Awareness" procedure in your CLAUDE.md — call mcp__oslo__find_shift_conflicts for tomorrow AND also look at home-required tasks due tomorrow (bins, deliveries, home chores, home maintenance) that fall in away hours (find_shift_conflicts only catches tasks that have a scheduledStart time). If any, add a short "⚠️ Tomorrow's schedule conflicts" block naming each task, the conflict, and a suggested at-home time (or a day off). If none, omit the block.
+4. READ-ONLY routine: do NOT actually roll anything forward — do NOT call reschedule_tasks / update_task or any send_* / set_* tool; for conflicts only SUGGEST times and ask. End by asking, e.g. "Want me to move the blue bin to tomorrow 7:30pm, or roll any tasks forward?" (Steph confirms first.)
 
 If wrap_up errors, reply with only <internal>wrap_up failed: …</internal> so nothing is posted.`,
   },
