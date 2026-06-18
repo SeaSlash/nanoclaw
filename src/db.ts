@@ -418,6 +418,22 @@ export function getLastBotMessageTimestamp(
   return row?.ts ?? undefined;
 }
 
+/**
+ * Timestamp of the most recent inbound (user, non-bot) message in a chat.
+ * Used to detect an active conversation so proactive nudges don't interrupt.
+ */
+export function getLastUserMessageTimestamp(
+  chatJid: string,
+): string | undefined {
+  const row = db
+    .prepare(
+      `SELECT MAX(timestamp) as ts FROM messages
+       WHERE chat_jid = ? AND is_bot_message = 0`,
+    )
+    .get(chatJid) as { ts: string | null } | undefined;
+  return row?.ts ?? undefined;
+}
+
 export function createTask(
   task: Omit<ScheduledTask, 'last_run' | 'last_result'>,
 ): void {

@@ -5,6 +5,7 @@ import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
 import {
+  ACTIVE_CONVERSATION_WINDOW_MS,
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
   SCHEDULER_MAX_CATCHUP_PER_TICK,
@@ -24,6 +25,7 @@ import {
   getAllTasks,
   getDueTasks,
   getLastTaskRun,
+  getLastUserMessageTimestamp,
   getRouterState,
   getTaskById,
   logTaskRun,
@@ -163,6 +165,39 @@ async function runTaskInner(
       error: `Group not found: ${task.group_folder}`,
     });
     return;
+  }
+
+  // Don't let a proactive nudge interrupt an active conversation. Script-gated
+  // tasks (the */5 poll) are "wake only if needed" sweeps; if Steph messaged this
+  // chat within the active window, defer this tick — the pending items persist
+  // server-side and the poll picks them up once the conversation lulls. Logged as
+  // a no-op success so the heartbeat still sees the poll running.
+  if (task.script) {
+    const lastUserMsg = getLastUserMessageTimestamp(task.chat_jid);
+    if (
+      lastUserMsg &&
+      Date.now() - new Date(lastUserMsg).getTime() <
+        ACTIVE_CONVERSATION_WINDOW_MS
+    ) {
+      logger.info(
+        { taskId: task.id, lastUserMsg },
+        'Deferring proactive task — active conversation',
+      );
+      logTaskRun({
+        task_id: task.id,
+        run_at: new Date().toISOString(),
+        duration_ms: 0,
+        status: 'success',
+        result: null,
+        error: null,
+      });
+      updateTaskAfterRun(
+        task.id,
+        computeNextRun(task),
+        'Deferred (active conversation)',
+      );
+      return;
+    }
   }
 
   // Update tasks snapshot for container to read (filtered by group)

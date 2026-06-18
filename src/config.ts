@@ -18,6 +18,10 @@ export const ASSISTANT_HAS_OWN_NUMBER =
     envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
 export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
+// A proactive nudge (the script-gated poll) defers while the user is actively
+// chatting — i.e. if they sent a message within this window — so it never
+// interrupts a live conversation.
+export const ACTIVE_CONVERSATION_WINDOW_MS = 15 * 60 * 1000; // 15 min
 
 // Absolute paths needed for container mounts
 const PROJECT_ROOT = process.cwd();
