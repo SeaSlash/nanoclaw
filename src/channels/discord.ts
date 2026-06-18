@@ -21,10 +21,31 @@ import {
   RegisteredGroup,
 } from '../types.js';
 
-// Limits for inbound Discord image attachments (downloaded host-side).
-const MAX_IMAGES_PER_MSG = 5; // Discord allows up to 10 — only take the first few
-const MAX_IMAGE_BYTES = 25 * 1024 * 1024; // 25 MB per image
+// Limits for inbound Discord attachments (images + documents, downloaded host-side).
+const MAX_ATTACHMENTS_PER_MSG = 5; // Discord allows up to 10 — only take the first few
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024; // 25 MB per file
 const MAX_RETAINED_ATTACHMENTS = 30; // newest N kept per group workspace
+// Document types Nova can read once downloaded. PDFs + plain-text formats go
+// through the Read tool; Word/RTF/ODT/HTML are extracted with pandoc.
+const READABLE_DOC_EXTENSIONS = new Set([
+  'pdf',
+  'docx',
+  'doc',
+  'rtf',
+  'odt',
+  'txt',
+  'md',
+  'markdown',
+  'csv',
+  'tsv',
+  'json',
+  'log',
+  'xml',
+  'yaml',
+  'yml',
+  'html',
+  'htm',
+]);
 
 export interface DiscordChannelOpts {
   onMessage: OnInboundMessage;
@@ -103,25 +124,45 @@ export class DiscordChannel implements Channel {
 
       // Handle attachments — store placeholders so the agent knows something was sent.
       // Image attachments are also collected for download into the group workspace.
-      const imageAttachments: { url: string; name: string; size: number }[] =
-        [];
+      const downloadable: {
+        url: string;
+        name: string;
+        size: number;
+        kind: 'image' | 'doc';
+      }[] = [];
       if (message.attachments.size > 0) {
         const attachmentDescriptions = [...message.attachments.values()].map(
           (att) => {
             const contentType = att.contentType || '';
+            const name = att.name || 'file';
+            const ext = name.includes('.')
+              ? name.split('.').pop()!.toLowerCase()
+              : '';
             if (contentType.startsWith('image/')) {
-              imageAttachments.push({
+              downloadable.push({
                 url: att.url,
                 name: att.name || 'image',
                 size: att.size,
+                kind: 'image',
               });
-              return `[Image: ${att.name || 'image'}]`;
+              return `[Image: ${name}]`;
             } else if (contentType.startsWith('video/')) {
-              return `[Video: ${att.name || 'video'}]`;
+              return `[Video: ${name}]`;
             } else if (contentType.startsWith('audio/')) {
-              return `[Audio: ${att.name || 'audio'}]`;
+              return `[Audio: ${name}]`;
+            } else if (
+              contentType === 'application/pdf' ||
+              READABLE_DOC_EXTENSIONS.has(ext)
+            ) {
+              downloadable.push({
+                url: att.url,
+                name,
+                size: att.size,
+                kind: 'doc',
+              });
+              return `[Document: ${name}]`;
             } else {
-              return `[File: ${att.name || 'file'}]`;
+              return `[File: ${name}]`;
             }
           },
         );
@@ -168,13 +209,13 @@ export class DiscordChannel implements Channel {
         return;
       }
 
-      // Download image attachments into the group workspace so the agent can
-      // view them with its Read tool (/workspace/group is mounted read-write).
-      if (imageAttachments.length > 0) {
-        const hint = await this.saveImageAttachments(
+      // Download image + document attachments into the group workspace so the
+      // agent can read them (/workspace/group is mounted read-write).
+      if (downloadable.length > 0) {
+        const hint = await this.saveAttachments(
           group.folder,
           msgId,
-          imageAttachments,
+          downloadable,
         );
         if (hint) {
           content = content ? `${content}\n${hint}` : hint;
@@ -226,10 +267,15 @@ export class DiscordChannel implements Channel {
    * container-visible paths, or '' if nothing was saved (downloads are
    * best-effort — a failure degrades to the text placeholder, never throws).
    */
-  private async saveImageAttachments(
+  private async saveAttachments(
     folder: string,
     msgId: string,
-    images: { url: string; name: string; size: number }[],
+    attachments: {
+      url: string;
+      name: string;
+      size: number;
+      kind: 'image' | 'doc';
+    }[],
   ): Promise<string> {
     let attDir: string;
     try {
@@ -240,60 +286,79 @@ export class DiscordChannel implements Channel {
       return '';
     }
 
-    // Cap how many images we download per message (Discord allows up to 10).
-    const capped = images.slice(0, MAX_IMAGES_PER_MSG);
-    if (images.length > capped.length) {
+    // Cap how many we download per message (Discord allows up to 10).
+    const capped = attachments.slice(0, MAX_ATTACHMENTS_PER_MSG);
+    if (attachments.length > capped.length) {
       logger.warn(
-        { folder, total: images.length, kept: capped.length },
-        'Too many image attachments — downloading only the first few',
+        { folder, total: attachments.length, kept: capped.length },
+        'Too many attachments — downloading only the first few',
       );
     }
 
-    const savedPaths: string[] = [];
+    const saved: { path: string; kind: 'image' | 'doc'; ext: string }[] = [];
     for (let i = 0; i < capped.length; i++) {
-      const img = capped[i];
-      // Skip oversized images using Discord's reported size — before any download.
-      if (img.size && img.size > MAX_IMAGE_BYTES) {
+      const att = capped[i];
+      // Skip oversized files using Discord's reported size — before any download.
+      if (att.size && att.size > MAX_ATTACHMENT_BYTES) {
         logger.warn(
-          { name: img.name, size: img.size },
-          'Skipping oversized Discord image',
+          { name: att.name, size: att.size },
+          'Skipping oversized Discord attachment',
         );
         continue;
       }
       try {
-        const res = await fetch(img.url);
+        const res = await fetch(att.url);
         if (!res.ok) {
           logger.warn(
-            { name: img.name, status: res.status },
-            'Discord image download failed',
+            { name: att.name, status: res.status },
+            'Discord attachment download failed',
           );
           continue;
         }
         const buf = Buffer.from(await res.arrayBuffer());
         // Sanitize the filename (msgId is a numeric snowflake) — no traversal.
-        const safeName = (img.name || 'image')
+        const safeName = (att.name || att.kind)
           .replace(/[^a-zA-Z0-9._-]/g, '_')
           .slice(-64);
         const fileName = `${msgId}-${i}-${safeName}`;
         fs.writeFileSync(path.join(attDir, fileName), buf);
-        savedPaths.push(`/workspace/group/attachments/${fileName}`);
+        const ext = safeName.includes('.')
+          ? safeName.split('.').pop()!.toLowerCase()
+          : '';
+        saved.push({
+          path: `/workspace/group/attachments/${fileName}`,
+          kind: att.kind,
+          ext,
+        });
         logger.info(
-          { folder, fileName, bytes: buf.length },
-          'Saved Discord image attachment',
+          { folder, fileName, bytes: buf.length, kind: att.kind },
+          'Saved Discord attachment',
         );
       } catch (err) {
-        logger.warn({ name: img.name, err }, 'Discord image download error');
+        logger.warn(
+          { name: att.name, err },
+          'Discord attachment download error',
+        );
       }
     }
 
     // Keep the attachments dir bounded — retain only the newest files.
     this.pruneAttachments(attDir, MAX_RETAINED_ATTACHMENTS);
 
-    if (savedPaths.length === 0) return '';
-    const list = savedPaths.map((p) => `- ${p}`).join('\n');
+    if (saved.length === 0) return '';
+    // Per-file guidance: how the agent should read each type.
+    const lines = saved.map(({ path: p, kind, ext }) => {
+      if (kind === 'image')
+        return `- ${p} — use the Read tool to view the image`;
+      if (ext === 'pdf')
+        return `- ${p} — use the Read tool (it reads PDFs); for a long text-only PDF you can run \`pdftotext '${p}' -\``;
+      if (['docx', 'doc', 'rtf', 'odt', 'html', 'htm'].includes(ext))
+        return `- ${p} — run \`pandoc '${p}' -t markdown\` to extract the text`;
+      return `- ${p} — use the Read tool`;
+    });
     return (
-      `The user attached ${savedPaths.length} image(s). ` +
-      `Use the Read tool on each path below to view the image contents:\n${list}`
+      `The user attached ${saved.length} file(s). Read each before answering:\n` +
+      lines.join('\n')
     );
   }
 

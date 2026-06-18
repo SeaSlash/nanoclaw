@@ -534,7 +534,7 @@ describe('DiscordChannel', () => {
       );
     });
 
-    it('stores file attachment with placeholder', async () => {
+    it('stores document attachment with placeholder', async () => {
       const opts = createTestOpts();
       const channel = new DiscordChannel('test-token', opts);
       await channel.connect();
@@ -552,7 +552,30 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: '[File: report.pdf]',
+          content: '[Document: report.pdf]',
+        }),
+      );
+    });
+
+    it('stores unknown file type with [File:] placeholder', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      const attachments = new Map([
+        ['att1', { name: 'archive.zip', contentType: 'application/zip' }],
+      ]);
+      const msg = createMessage({
+        content: '',
+        attachments,
+        guildName: 'Server',
+      });
+      await triggerMessage(msg);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'dc:1234567890123456',
+        expect.objectContaining({
+          content: '[File: archive.zip]',
         }),
       );
     });
@@ -599,7 +622,7 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: '[Image: a.png]\n[File: b.txt]',
+          content: '[Image: a.png]\n[Document: b.txt]',
         }),
       );
     });
