@@ -274,7 +274,9 @@ const SCHEDULED_TASK_PREAMBLE =
  * correct across midnight. Prepended to every query (see runQuery).
  */
 function dateContextLine(): string {
+  const now = new Date();
   let s: string;
+  let t = '';
   try {
     s = new Intl.DateTimeFormat('en-US', {
       timeZone: CONTAINER_TZ,
@@ -282,11 +284,22 @@ function dateContextLine(): string {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
-    }).format(new Date());
+    }).format(now);
+    t = new Intl.DateTimeFormat('en-US', {
+      timeZone: CONTAINER_TZ,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).format(now);
   } catch {
-    s = new Date().toUTCString();
+    s = now.toUTCString();
   }
-  return `[DATE CONTEXT] Today is ${s} (${CONTAINER_TZ}). Use this exact weekday and date verbatim in any header or date reference.`;
+  const iso = now.toISOString();
+  return (
+    `[DATE CONTEXT] Now is ${s}${t ? `, ${t}` : ''} (${CONTAINER_TZ}); ISO ${iso}. ` +
+    `Use this exact weekday and date verbatim in any header. For any "current time" ` +
+    `or timestamp field (e.g. .last-nudge.json "at"), copy the ISO value above — never guess the date or time.`
+  );
 }
 
 /** Current date as a local-TZ "YYYY-MM-DD" stamp (for filenames/sorting). */

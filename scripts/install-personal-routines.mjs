@@ -39,7 +39,7 @@ Your entire final reply is auto-posted to the Discord channel verbatim — only 
 // Shared: persist what the routine surfaced so a REPLY to it has context. Steph's
 // replies are handled by Nova in a SEPARATE session that cannot see this digest —
 // without this file it guesses the wrong name/channel/item. (One allowed file write.)
-const NUDGE_CONTEXT = `When you do post a digest, before your final reply also write /workspace/group/.last-nudge.json so a reply to it has context. Format: { "at": "<current ISO time>", "nudge": "<one-line gist of what you posted>", "items": [ for each actionable item you surfaced: { "sourceType": "email" | "sms" | "social" | "task", "sourceId": "<its id>", "title": "<sender / subject / task description>", "body": "<short preview>" } ] }. Use the Write tool — this single file write is allowed despite the read-only rule. If you posted nothing, do not write the file.`;
+const NUDGE_CONTEXT = `When you do post a digest, before your final reply also write /workspace/group/.last-nudge.json so a reply to it has context. Format: { "at": "<the ISO value from the [DATE CONTEXT] line, copied verbatim — do not guess it>", "nudge": "<one-line gist of what you posted>", "items": [ for each actionable item you surfaced: { "sourceType": "email" | "sms" | "social" | "task", "sourceId": "<its id>", "title": "<sender / subject / task description>", "body": "<short preview>" } ] }. Use the Write tool — this single file write is allowed despite the read-only rule. If you posted nothing, do not write the file.`;
 
 const TASK_DEFINITIONS = [
   {

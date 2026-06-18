@@ -156,7 +156,7 @@ Every path below, whether you post or stop: your final turn reply is auto-forwar
    </example>
 
 4) Right after send_message returns, save what you surfaced so a reply to this nudge has context. (Steph's replies are handled by Nova in a separate session that cannot see this nudge — without this file it can't tell who "her" is, whether it's email vs SMS, or which item, so it guesses wrong.) Write /workspace/group/.last-nudge.json with the exact items you posted:
-   { "at": "<current ISO time>", "nudge": "<one-line gist of what you posted>", "items": [ <the exact item objects you posted: each {sourceType, sourceId, kind, title, body}> ] }
+   { "at": "<the ISO value from the [DATE CONTEXT] line, copied verbatim — do not guess it>", "nudge": "<one-line gist of what you posted>", "items": [ <the exact item objects you posted: each {sourceType, sourceId, kind, title, body}> ] }
    Use the Write tool — this is the only file you may write.
 
 5) Only after send_message returns, ack exactly the items you surfaced so they stop reappearing:
