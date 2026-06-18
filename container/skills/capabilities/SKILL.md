@@ -34,16 +34,16 @@ Each directory is an installed skill. The directory name is the skill name (e.g.
 
 ### 2. Available tools
 
-Read the allowed tools from your SDK configuration. You always have access to:
+Report the tools you actually have in this session. The list below is the baseline — treat it as a floor, not ground truth: include any extra tools you actually have and omit any you don't.
 - **Core:** Bash, Read, Write, Edit, Glob, Grep
 - **Web:** WebSearch, WebFetch
 - **Orchestration:** Task, TaskOutput, TaskStop, TeamCreate, TeamDelete, SendMessage
 - **Other:** TodoWrite, ToolSearch, Skill, NotebookEdit
-- **MCP:** mcp__nanoclaw__* (messaging, tasks, group management)
+- **MCP:** mcp__nanoclaw__* (messaging, tasks, group management), plus any other configured MCP servers (e.g. mcp__oslo__* on groups that have it)
 
 ### 3. MCP server tools
 
-The NanoClaw MCP server exposes these tools (via `mcp__nanoclaw__*` prefix):
+The NanoClaw MCP server (`mcp__nanoclaw__*` prefix) provides at least the tools below — verify against what you actually have, since the surface may have grown:
 - `send_message` — send a message to the user/group
 - `schedule_task` — schedule a recurring or one-time task
 - `list_tasks` — list scheduled tasks
@@ -52,6 +52,8 @@ The NanoClaw MCP server exposes these tools (via `mcp__nanoclaw__*` prefix):
 - `cancel_task` — cancel and delete a task
 - `update_task` — update an existing task
 - `register_group` — register a new chat/group (main only)
+
+Other MCP servers may also be configured for this group (e.g. the Oslo dashboard `mcp__oslo__*` tools) — include the ones you actually have.
 
 ### 4. Container skills (Bash tools)
 
@@ -95,6 +97,6 @@ Present the report as a clean, readable message. Example:
 • Main channel: yes
 ```
 
-Adapt the output based on what you actually find — don't list things that aren't installed.
+Adapt the output based on what you actually find — the lists above are a baseline, so include extra tools/servers you actually have and don't list things that aren't installed.
 
 **See also:** `/status` for a quick health check of session, workspace, and tasks.

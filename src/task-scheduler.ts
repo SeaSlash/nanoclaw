@@ -1,9 +1,12 @@
 import { ChildProcess } from 'child_process';
+import { request as httpRequest } from 'http';
+
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
 import {
   ASSISTANT_NAME,
+  CREDENTIAL_PROXY_PORT,
   SCHEDULER_MAX_CATCHUP_PER_TICK,
   SCHEDULER_POLL_INTERVAL,
   TASK_LOG_RETENTION_MS,
@@ -15,21 +18,27 @@ import {
   runContainerAgent,
   writeTasksSnapshot,
 } from './container-runner.js';
+import { detectAuthMode } from './credential-proxy.js';
+import { PROXY_BIND_HOST } from './container-runtime.js';
 import {
   getAllTasks,
   getDueTasks,
+  getLastTaskRun,
+  getRouterState,
   getTaskById,
   logTaskRun,
   pruneCompletedTasks,
   pruneOldTaskRunLogs,
   resetRetryCount,
   scheduleTaskRetry,
+  setRouterState,
   updateTask,
   updateTaskAfterRun,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
+import { looksLikeAuthFailure } from './router.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
 /**
@@ -83,7 +92,7 @@ export interface SchedulerDependencies {
     containerName: string,
     groupFolder: string,
   ) => void;
-  sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMessage: (jid: string, text: string) => Promise<boolean>;
 }
 
 // Process-wide overlap guard: task ids currently enqueued-or-running. The
@@ -176,6 +185,8 @@ async function runTaskInner(
 
   let result: string | null = null;
   let error: string | null = null;
+  let deliveryFailed = false;
+  let authFailure = false;
 
   // For group context mode, use the group's current session
   const sessions = deps.getSessions();
@@ -213,10 +224,23 @@ async function runTaskInner(
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
-          result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
-          scheduleClose();
+          if (looksLikeAuthFailure(streamedOutput.result)) {
+            // Expired/invalid token surfaced as normal text — do NOT post it to
+            // the user. Mark the run failed so the heartbeat sees it and the poll
+            // (if any) won't ack; the hourly OAuth probe sends the fix steps.
+            authFailure = true;
+            error = 'auth_failure';
+            scheduleClose();
+          } else {
+            result = streamedOutput.result;
+            // Forward to the user and capture whether delivery actually succeeded.
+            const delivered = await deps.sendMessage(
+              task.chat_jid,
+              streamedOutput.result,
+            );
+            if (!delivered) deliveryFailed = true;
+            scheduleClose();
+          }
         }
         if (streamedOutput.status === 'success') {
           deps.queue.notifyIdle(task.chat_jid);
@@ -232,7 +256,7 @@ async function runTaskInner(
 
     if (output.status === 'error') {
       error = output.error || 'Unknown error';
-    } else if (output.result) {
+    } else if (output.result && !authFailure) {
       // Result was already forwarded to the user via the streaming callback above
       result = output.result;
     }
@@ -248,6 +272,18 @@ async function runTaskInner(
   }
 
   const durationMs = Date.now() - startTime;
+
+  // A non-empty result that failed to deliver is a failed run — visible to the
+  // heartbeat and eligible for the existing retry/backoff below.
+  if (deliveryFailed && !error) {
+    error = `delivery_failed: ${task.chat_jid}`;
+  }
+  // Auth failure: suppress the captured "Not logged in" text and confirm/alert
+  // out-of-band (the probe only alerts if the token is genuinely 401).
+  if (authFailure) {
+    result = null;
+    void maybeProbeOauth(deps).catch(() => {});
+  }
 
   logTaskRun({
     task_id: task.id,
@@ -300,6 +336,187 @@ async function runTaskInner(
   }
 }
 
+// --- Reliability: host-side alerts, OAuth health probe, daily heartbeat ---
+// All alerts go to the main group (registeredGroups is keyed by jid) via the
+// existing deps.sendMessage wiring — no new send path, no new tables.
+
+function mainGroupJid(deps: SchedulerDependencies): string | undefined {
+  for (const [jid, g] of Object.entries(deps.registeredGroups())) {
+    if (g.isMain === true) return jid;
+  }
+  return undefined;
+}
+
+const OAUTH_ALERT_KEY = 'oauth_alert_state';
+const OAUTH_REALERT_MS = 12 * 60 * 60 * 1000; // re-alert at most ~twice/day while dead
+// The proxy binds to PROXY_BIND_HOST (the container-bridge IP on macOS/Apple
+// Container, or 0.0.0.0 elsewhere). Probe that exact host — 127.0.0.1 would miss
+// a bridge-bound proxy and always read 'transient' (never detecting a dead token).
+const PROBE_HOST =
+  PROXY_BIND_HOST === '0.0.0.0' ? '127.0.0.1' : PROXY_BIND_HOST;
+
+// Probe the credential proxy with a placeholder Bearer token; the proxy swaps in
+// the real OAuth token, so 200 = healthy, 401 = expired/invalid, anything else =
+// transient (network/upstream) which must NOT be read as a dead token.
+function probeCredentialProxy(): Promise<'healthy' | 'dead' | 'transient'> {
+  return new Promise((resolve) => {
+    const body = JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8,
+      messages: [{ role: 'user', content: 'ping' }],
+    });
+    const req = httpRequest(
+      {
+        host: PROBE_HOST,
+        port: CREDENTIAL_PROXY_PORT,
+        path: '/v1/messages',
+        method: 'POST',
+        timeout: 15000,
+        headers: {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+          authorization: 'Bearer placeholder',
+          'anthropic-version': '2023-06-01',
+          'anthropic-beta': 'oauth-2025-04-20',
+        },
+      },
+      (res) => {
+        const code = res.statusCode || 0;
+        res.resume(); // drain
+        resolve(code === 200 ? 'healthy' : code === 401 ? 'dead' : 'transient');
+      },
+    );
+    req.on('error', () => resolve('transient'));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve('transient');
+    });
+    req.write(body);
+    req.end();
+  });
+}
+
+// Alert Steph that the OAuth token is dead, with the exact refresh steps.
+// De-duped via router_state (edge + ~12h) so an outage doesn't spam.
+async function alertOauthExpired(deps: SchedulerDependencies): Promise<void> {
+  const now = Date.now();
+  let state: { status?: string; at?: number } = {};
+  try {
+    state = JSON.parse(getRouterState(OAUTH_ALERT_KEY) || '{}');
+  } catch {
+    state = {};
+  }
+  if (
+    state.status === 'dead' &&
+    state.at &&
+    now - state.at < OAUTH_REALERT_MS
+  ) {
+    return; // already alerted recently
+  }
+  const jid = mainGroupJid(deps);
+  if (!jid) {
+    logger.error('OAuth token appears expired but no main group to alert');
+    return;
+  }
+  const msg =
+    '⚠️ Nova auth problem: the Claude OAuth token looks expired or invalid, so scheduled tasks can’t reach the model. Fix it: run `claude setup-token`, then `bash scripts/refresh-oauth-token.sh` (it updates .env and restarts the service).';
+  const delivered = await deps.sendMessage(jid, msg);
+  if (delivered) {
+    setRouterState(
+      OAUTH_ALERT_KEY,
+      JSON.stringify({ status: 'dead', at: now }),
+    );
+    logger.warn('Alerted main group: OAuth token expired');
+  }
+}
+
+function clearOauthAlert(): void {
+  try {
+    const state = JSON.parse(getRouterState(OAUTH_ALERT_KEY) || '{}');
+    if (state.status === 'dead') {
+      setRouterState(
+        OAUTH_ALERT_KEY,
+        JSON.stringify({ status: 'ok', at: Date.now() }),
+      );
+      logger.info('OAuth token healthy again');
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+// Hourly in OAuth mode: probe and alert on a dead token before the next brief
+// tries to run. Host-side so it still fires when the token is dead.
+async function maybeProbeOauth(deps: SchedulerDependencies): Promise<void> {
+  if (detectAuthMode() !== 'oauth') return;
+  const status = await probeCredentialProxy();
+  if (status === 'dead') await alertOauthExpired(deps);
+  else if (status === 'healthy') clearOauthAlert();
+}
+
+const HEARTBEAT_KEY = 'heartbeat_last_run';
+const HR = 60 * 60 * 1000;
+// Routines whose runs we expect. The poll logs a run every 5 min around the clock
+// (gate-skipped quiet-hours runs still log success), so a stale poll means the
+// whole scheduler/container path is down.
+const HEARTBEAT_CHECKS: { id: string; label: string; maxAgeMs: number }[] = [
+  { id: 'routine-morning-brief', label: '7am brief', maxAgeMs: 26 * HR },
+  { id: 'routine-triage-digest', label: 'noon digest', maxAgeMs: 26 * HR },
+  { id: 'routine-wrap-up', label: '9pm wrap-up', maxAgeMs: 26 * HR },
+  { id: 'task-openclaw-proactive-poll', label: '5-min poll', maxAgeMs: 2 * HR },
+];
+
+function localDateHour(): { date: string; hour: number } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date());
+  const get = (t: string) => parts.find((p) => p.type === t)?.value || '';
+  const hour = parseInt(get('hour'), 10) % 24; // some ICU builds emit "24" at midnight
+  return { date: `${get('year')}-${get('month')}-${get('day')}`, hour };
+}
+
+// Once/day after the evening routines, confirm each expected routine ran and
+// succeeded recently; alert naming only what broke. Silent when all green.
+async function runHeartbeat(deps: SchedulerDependencies): Promise<void> {
+  const { date, hour } = localDateHour();
+  if (hour < 22) return; // wait until after the 9pm wrap-up
+  if (getRouterState(HEARTBEAT_KEY) === date) return; // already checked today
+
+  const now = Date.now();
+  const problems: string[] = [];
+  for (const c of HEARTBEAT_CHECKS) {
+    const last = getLastTaskRun(c.id);
+    if (!last) {
+      problems.push(`${c.label}: no runs recorded`);
+      continue;
+    }
+    const ageMs = now - new Date(last.run_at).getTime();
+    if (ageMs > c.maxAgeMs) {
+      problems.push(`${c.label}: last ran ${Math.round(ageMs / HR)}h ago`);
+    } else if (last.status === 'error') {
+      problems.push(`${c.label}: failed (${last.error || 'error'})`);
+    }
+  }
+
+  if (problems.length === 0) {
+    setRouterState(HEARTBEAT_KEY, date); // healthy — don't recheck today
+    return;
+  }
+  const jid = mainGroupJid(deps);
+  if (!jid) {
+    logger.error({ problems }, 'Heartbeat found problems but no main group');
+    return;
+  }
+  const msg = `⚠️ Nova self-check (${date}) found routine problems:\n• ${problems.join('\n• ')}\n\nCheck logs/nanoclaw.log or task_run_logs.`;
+  const delivered = await deps.sendMessage(jid, msg);
+  if (delivered) setRouterState(HEARTBEAT_KEY, date);
+}
+
 let schedulerRunning = false;
 
 export function startSchedulerLoop(deps: SchedulerDependencies): void {
@@ -333,6 +550,15 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
         } catch (err) {
           logger.error({ err }, 'Retention sweep failed');
         }
+
+        // OAuth token health (oauth mode only) + daily heartbeat self-monitor.
+        // Best-effort and network-bound, so run them without blocking the tick.
+        void maybeProbeOauth(deps).catch((err) =>
+          logger.error({ err }, 'OAuth health probe failed'),
+        );
+        void runHeartbeat(deps).catch((err) =>
+          logger.error({ err }, 'Heartbeat self-monitor failed'),
+        );
       }
 
       // Cap catch-up per tick so a post-downtime backlog drains over several

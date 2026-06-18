@@ -98,14 +98,26 @@ export const TRIGGER_PATTERN = buildTriggerPattern(DEFAULT_TRIGGER);
 // Timezone for scheduled tasks, message formatting, etc.
 // Validates each candidate is a real IANA identifier before accepting.
 function resolveConfigTimezone(): string {
-  const candidates = [
-    process.env.TZ,
-    envConfig.TZ,
-    Intl.DateTimeFormat().resolvedOptions().timeZone,
-  ];
-  for (const tz of candidates) {
-    if (tz && isValidTimezone(tz)) return tz;
-  }
+  // An explicitly configured zone (process.env or .env) is authoritative.
+  const explicit = process.env.TZ || envConfig.TZ;
+  if (explicit && isValidTimezone(explicit)) return explicit;
+
+  // No valid explicit TZ: we must fall back to the host's system zone (or UTC).
+  // That's silent date/weekday skew waiting to happen — scheduled-task firing
+  // times, the container clock, and every proactive-message date all key off
+  // TIMEZONE — so warn loudly rather than guessing quietly.
+  console.warn(
+    explicit
+      ? `[config] TZ "${explicit}" is not a valid IANA timezone; falling back ` +
+          'to the host system zone. Set a valid TZ in .env (e.g. ' +
+          'TZ=America/Toronto) to avoid date/weekday skew.'
+      : '[config] No TZ set in process.env or .env; falling back to the host ' +
+          'system zone. Set TZ in .env (e.g. TZ=America/Toronto) to pin ' +
+          'scheduled-task times and proactive-message dates.',
+  );
+
+  const system = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (system && isValidTimezone(system)) return system;
   return 'UTC';
 }
 export const TIMEZONE = resolveConfigTimezone();

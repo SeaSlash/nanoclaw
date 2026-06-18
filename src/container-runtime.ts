@@ -149,8 +149,7 @@ export function cleanupOrphans(): void {
         id: string;
         labels?: Record<string, string>;
       };
-    }[] =
-      JSON.parse(output || '[]');
+    }[] = JSON.parse(output || '[]');
     const currentHostname = os.hostname();
     const orphans = containers
       .filter(

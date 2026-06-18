@@ -45,7 +45,7 @@ ls /workspace/ipc/ 2>/dev/null
 
 ### 3. Tool availability
 
-Confirm which tool families are available to you:
+Confirm which tool families you actually have this session (the list below is the baseline — include extras you have, e.g. an MCP server like `mcp__oslo__*`, and omit anything absent):
 
 - **Core:** Bash, Read, Write, Edit, Glob, Grep
 - **Web:** WebSearch, WebFetch

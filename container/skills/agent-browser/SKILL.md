@@ -1,6 +1,6 @@
 ---
 name: agent-browser
-description: Browse the web for any task — research topics, read articles, interact with web apps, fill forms, take screenshots, extract data, and test web pages. Use whenever a browser would be useful, not just when the user explicitly asks.
+description: Browse the web for any task — research topics, read articles, interact with web apps, fill forms, take screenshots, extract data, and test web pages. Use when a task needs live interaction with a page (filling forms, clicking through an app, screenshots, or data WebFetch can't reach); for a quick static read, WebFetch/WebSearch is cheaper.
 allowed-tools: Bash(agent-browser:*)
 ---
 
@@ -117,6 +117,8 @@ agent-browser state save auth.json
 agent-browser state load auth.json
 agent-browser open https://app.example.com/dashboard
 ```
+
+`auth.json` holds a live session (tokens/cookies) — treat it as a secret: write it only under the group workspace, never echo its contents, and don't reuse it across groups.
 
 ### Cookies & Storage
 

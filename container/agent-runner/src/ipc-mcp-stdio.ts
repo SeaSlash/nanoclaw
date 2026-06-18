@@ -52,18 +52,59 @@ server.tool(
       ),
   },
   async (args) => {
+    const deliveryId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const data: Record<string, string | undefined> = {
       type: 'message',
       chatJid,
       text: args.text,
       sender: args.sender || undefined,
       groupFolder,
+      deliveryId,
       timestamp: new Date().toISOString(),
     };
 
     writeIpcFile(MESSAGES_DIR, data);
 
-    return { content: [{ type: 'text' as const, text: 'Message sent.' }] };
+    // Wait (bounded) for the host to confirm delivery, so we never report success
+    // on a dropped message — the poll acks /pending only after a confirmed send.
+    const receiptFile = path.join(IPC_DIR, 'sent', `${deliveryId}.json`);
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      if (fs.existsSync(receiptFile)) {
+        let ok = false;
+        try {
+          ok = JSON.parse(fs.readFileSync(receiptFile, 'utf-8')).ok === true;
+        } catch {
+          ok = false;
+        }
+        try {
+          fs.unlinkSync(receiptFile);
+        } catch {
+          /* best-effort cleanup */
+        }
+        return ok
+          ? { content: [{ type: 'text' as const, text: 'Message sent.' }] }
+          : {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: 'Delivery failed — do not ack; it will be retried on the next run.',
+                },
+              ],
+              isError: true,
+            };
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: 'Delivery unconfirmed (host timeout) — do not ack; it will be retried on the next run.',
+        },
+      ],
+      isError: true,
+    };
   },
 );
 

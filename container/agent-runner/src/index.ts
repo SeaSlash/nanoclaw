@@ -186,7 +186,7 @@ function createPreCompactHook(assistantName?: string): HookCallback {
       const conversationsDir = '/workspace/group/conversations';
       fs.mkdirSync(conversationsDir, { recursive: true });
 
-      const date = new Date().toISOString().split('T')[0];
+      const date = localDateStamp();
       const filename = `${date}-${name}.md`;
       const filePath = path.join(conversationsDir, filename);
 
@@ -254,6 +254,56 @@ function parseTranscript(content: string): ParsedMessage[] {
   return messages;
 }
 
+// Timezone the container runs in. The host passes the user's IANA zone via
+// `-e TZ=...` (src/container-runner.ts); fall back to UTC if it's somehow unset.
+// Every date string we render uses this EXPLICITLY (never the implicit system
+// default) so a missing/odd TZ can't silently skew dates.
+const CONTAINER_TZ =
+  process.env.TZ && process.env.TZ.trim() ? process.env.TZ.trim() : 'UTC';
+
+// One framing for every scheduled-task wake (plain and script-enriched paths),
+// so the agent always learns the turn was machine-triggered — not a human
+// message — and can address/tone the reply accordingly.
+const SCHEDULED_TASK_PREAMBLE =
+  '[SCHEDULED TASK — triggered automatically; this was not sent by the user or anyone in the chat.]';
+
+/**
+ * Authoritative current weekday + date for the model to echo verbatim, e.g.
+ * "Thursday, Jun 18, 2026". Computed deterministically in JS (not by the LLM,
+ * which is unreliable at date→weekday math) and recomputed per turn so it stays
+ * correct across midnight. Prepended to every query (see runQuery).
+ */
+function dateContextLine(): string {
+  let s: string;
+  try {
+    s = new Intl.DateTimeFormat('en-US', {
+      timeZone: CONTAINER_TZ,
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    }).format(new Date());
+  } catch {
+    s = new Date().toUTCString();
+  }
+  return `[DATE CONTEXT] Today is ${s} (${CONTAINER_TZ}). Use this exact weekday and date verbatim in any header or date reference.`;
+}
+
+/** Current date as a local-TZ "YYYY-MM-DD" stamp (for filenames/sorting). */
+function localDateStamp(): string {
+  try {
+    // en-CA yields ISO-style YYYY-MM-DD.
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: CONTAINER_TZ,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+  } catch {
+    return new Date().toISOString().split('T')[0];
+  }
+}
+
 function formatTranscriptMarkdown(
   messages: ParsedMessage[],
   title?: string | null,
@@ -262,6 +312,7 @@ function formatTranscriptMarkdown(
   const now = new Date();
   const formatDateTime = (d: Date) =>
     d.toLocaleString('en-US', {
+      timeZone: CONTAINER_TZ,
       month: 'short',
       day: 'numeric',
       hour: 'numeric',
@@ -385,7 +436,12 @@ async function runQuery(
   closedDuringQuery: boolean;
 }> {
   const stream = new MessageStream();
-  stream.push(prompt);
+  // Prepend an authoritative weekday+date so the model never derives the weekday
+  // itself. This is the single point every query passes through (interactive,
+  // scheduled routines, the */5 poll, and follow-up turns), so it covers paths
+  // where a host-side prompt prepend would be lost (the poll rebuilds its prompt;
+  // follow-up turns replace it entirely).
+  stream.push(`${dateContextLine()}\n\n${prompt}`);
 
   // Poll IPC for follow-up messages and _close sentinel during the query
   let ipcPolling = true;
@@ -669,7 +725,7 @@ async function main(): Promise<void> {
   // Build initial prompt (drain any pending IPC messages too)
   let prompt = containerInput.prompt;
   if (containerInput.isScheduledTask) {
-    prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${prompt}`;
+    prompt = `${SCHEDULED_TASK_PREAMBLE}\n\n${prompt}`;
   }
   const pending = drainIpcInput();
   if (pending.length > 0) {
@@ -694,9 +750,11 @@ async function main(): Promise<void> {
       return;
     }
 
-    // Script says wake agent — enrich prompt with script data
+    // Script says wake agent — enrich prompt with script data. Same preamble as
+    // the plain path, and the machine data vs the instructions are fenced in XML
+    // so the model never confuses fetched data for what to do with it.
     log(`Script wakeAgent=true, enriching prompt with data`);
-    prompt = `[SCHEDULED TASK]\n\nScript output:\n${JSON.stringify(scriptResult.data, null, 2)}\n\nInstructions:\n${containerInput.prompt}`;
+    prompt = `${SCHEDULED_TASK_PREAMBLE}\n\n<script_output>\n${JSON.stringify(scriptResult.data, null, 2)}\n</script_output>\n\n<instructions>\n${containerInput.prompt}\n</instructions>`;
   }
 
   // Query loop: run query → wait for IPC message → run new query → repeat

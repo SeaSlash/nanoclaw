@@ -45,10 +45,22 @@ export function routeOutbound(
   channels: Channel[],
   jid: string,
   text: string,
-): Promise<void> {
+): Promise<boolean> {
   const channel = channels.find((c) => c.ownsJid(jid) && c.isConnected());
   if (!channel) throw new Error(`No channel for JID: ${jid}`);
   return channel.sendMessage(jid, text);
+}
+
+/**
+ * Heuristic: does this agent output look like an auth/credential failure that the
+ * SDK surfaced as normal text (e.g. an expired OAuth token)? Such text should be
+ * suppressed (not posted to the user) and alerted on, not forwarded verbatim.
+ */
+export function looksLikeAuthFailure(text: string): boolean {
+  if (!text) return false;
+  return /not logged in|please run \/login|invalid x-api-key|authentication_error|oauth token (?:has )?expired|invalid bearer token/i.test(
+    text,
+  );
 }
 
 export function findChannel(

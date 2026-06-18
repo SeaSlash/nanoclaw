@@ -49,7 +49,12 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
-import { findChannel, formatMessages, formatOutbound } from './router.js';
+import {
+  findChannel,
+  formatMessages,
+  formatOutbound,
+  looksLikeAuthFailure,
+} from './router.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
@@ -268,7 +273,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
-      if (text) {
+      if (text && looksLikeAuthFailure(text)) {
+        // Don't surface an expired-token "Not logged in" message to the user;
+        // the scheduler's hourly OAuth probe alerts with the fix steps.
+        logger.error(
+          { group: group.name },
+          'Suppressed auth-failure text from interactive reply',
+        );
+      } else if (text) {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
       }
@@ -682,10 +694,11 @@ async function main(): Promise<void> {
       const channel = findChannel(channels, jid);
       if (!channel) {
         logger.warn({ jid }, 'No channel owns JID, cannot send message');
-        return;
+        return false;
       }
       const text = formatOutbound(rawText);
-      if (text) await channel.sendMessage(jid, text);
+      if (!text) return true; // nothing to deliver (all-internal) — not a failure
+      return channel.sendMessage(jid, text);
     },
   });
   startIpcWatcher({

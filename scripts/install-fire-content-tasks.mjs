@@ -20,48 +20,61 @@ const TASK_DEFINITIONS = [
     scheduleType: 'cron',
     scheduleValue: '15 6 * * 1,3,5',
     contextMode: 'isolated',
-    prompt: `Run the fire-content adaptive strategy refresh.
+    prompt: `<task>Run the fire-content adaptive strategy refresh.</task>
+<steps>
 1. Run \`node scripts/sync-instagram-data.mjs --limit=100 --classify\`.
 2. Run \`node scripts/content-intel.mjs strategy-refresh\`.
 3. Run \`node scripts/content-intel.mjs list-drafts --status needs_review,needs_revision,approved\`.
 4. Read \`strategy/current.md\`.
-Send one concise update to the fire-content channel with:
+</steps>
+<report channel="fire-content" max_words="180">
+Send one concise update with:
 - the top 2 posting windows
-- one material change or "no material change"
+- one material change, or "no material change"
 - pending draft counts by status
-- only the approvals Steph actually needs to make today
-Keep it under 180 words.`,
+- only the approvals that are actually blocking today's publishing — i.e. a draft whose suggested window is today/tomorrow and still in needs_review. The point is to surface only what Steph must decide now, not re-list everything pending.
+</report>`,
   },
   {
     id: 'task-fire-content-draft-batch',
     scheduleType: 'cron',
     scheduleValue: '0 9 * * 1,4',
     contextMode: 'isolated',
-    prompt: `Run the fire-content evergreen draft batch.
+    prompt: `<task>Run the fire-content evergreen draft batch.</task>
+<steps>
 1. Read \`strategy/current.md\`. If it is missing or older than 3 days, run \`node scripts/content-intel.mjs strategy-refresh\` first.
 2. Run \`node scripts/content-intel.mjs list-drafts --status needs_review,needs_revision,approved\`.
-3. If there are already 4 or more pending drafts, do not create more. Send a short queue-health summary instead.
-4. Otherwise create 2 non-job drafts that fit the current strategy and real performance data. Do not invent new recruitment posts.
-5. Save each draft with \`node scripts/content-intel.mjs save-draft ...\`, including a distinct pillar, hypothesis, and visual brief.
-6. Do not approve or publish anything.
-Send a concise review batch with the new draft IDs, titles, hypotheses, and suggested publish windows.`,
+3. If there are already 4 or more pending drafts, don't create more — send a short queue-health summary instead.
+4. Otherwise create 2 non-job (evergreen) drafts that fit the current strategy and real performance data. These are evergreen content, not recruitment/job ads.
+5. Save each draft with \`node scripts/content-intel.mjs save-draft ...\`, giving each a distinct pillar, hypothesis, and visual brief.
+6. Draft only — don't approve or publish anything.
+</steps>
+<example kind="good">Pillar: behind-the-scenes craft | Hypothesis: process shots out-save finished-product shots for this audience | Visual brief: close-up of a recruit lacing bunker boots at 5am in a dim hall.</example>
+<example kind="avoid">"Now hiring — Toronto Fire recruit class open, apply today" — that's a job ad, not evergreen content.</example>
+<report channel="fire-content">
+Send a concise review batch with the new draft IDs, titles, hypotheses, and suggested publish windows.
+</report>`,
   },
   {
     id: 'task-fire-content-friday-retro',
     scheduleType: 'cron',
     scheduleValue: '0 17 * * 5',
     contextMode: 'isolated',
-    prompt: `Run the weekly fire-content retro.
+    prompt: `<task>Run the weekly fire-content retro.</task>
+<steps>
 1. Run \`node scripts/sync-instagram-data.mjs --limit=100 --classify\`.
 2. Run \`node scripts/content-intel.mjs match-performance\`.
 3. Run \`node scripts/content-intel.mjs strategy-refresh\`.
 4. Review published adaptive drafts, queued drafts, and \`strategy/current.md\`.
+</steps>
+<report channel="fire-content">
 Send one concise retro with:
 - what won this week
 - what underperformed or is still under-tested
 - the best current evergreen window
 - the next experiment to run
-If no adaptive drafts have published yet, say that clearly and focus on queue health instead.`,
+If no adaptive drafts have published yet, say that clearly and focus on queue health instead.
+</report>`,
   },
 ];
 

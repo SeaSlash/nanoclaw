@@ -665,10 +665,10 @@ describe('DiscordChannel', () => {
         new Error('Channel not found'),
       );
 
-      // Should not throw
+      // Should not throw; returns false on delivery failure
       await expect(
         channel.sendMessage('dc:1234567890123456', 'Will fail'),
-      ).resolves.toBeUndefined();
+      ).resolves.toBe(false);
     });
 
     it('does nothing when client is not initialized', async () => {

@@ -38,7 +38,7 @@ Check your group folder name or workspace path:
 
 ### Lists
 
-Slack supports simple bullet lists but NOT numbered lists:
+Slack supports simple bullet lists but not numbered lists:
 
 ```
 • First item
@@ -59,14 +59,18 @@ Use `•` (bullet character) or `- ` or `* ` for bullets.
 
 Use standard emoji shortcodes: `:white_check_mark:`, `:x:`, `:rocket:`, `:tada:`
 
-## What NOT to use
+## Converting from standard Markdown
 
-- **NO** `##` headings (use `*Bold text*` for headers instead)
-- **NO** `**double asterisks**` for bold (use `*single asterisks*`)
-- **NO** `[text](url)` links (use `<url|text>` instead)
-- **NO** `1.` numbered lists (use bullets with numbers: `• 1. First`)
-- **NO** tables (use code blocks or plain text alignment)
-- **NO** `---` horizontal rules
+These Markdown forms render literally on Slack — reach for the mrkdwn equivalent instead:
+
+| Standard Markdown | Use on Slack |
+|-------------------|--------------|
+| `## Heading` | `*Heading*` (a bold line) |
+| `**bold**` | `*bold*` (single asterisks) |
+| `[text](url)` | `<url\|text>` |
+| `1.` numbered list | `•` bullets (or `• 1. …` if the number matters) |
+| table | code block or plain-text alignment |
+| `---` horizontal rule | a blank line, or omit |
 
 ## Example message
 
@@ -84,11 +88,6 @@ _March 21, 2026_
 :white_check_mark: All tests passing | <https://ci.example.com/builds/123|View Build>
 ```
 
-## Quick rules
+## Gotchas
 
-1. Use `*bold*` not `**bold**`
-2. Use `<url|text>` not `[text](url)`
-3. Use `•` bullets, avoid numbered lists
-4. Use `:emoji:` shortcodes
-5. Quote blocks with `>`
-6. Skip headings — use bold text instead
+Single asterisks for bold (`*bold*`, not `**bold**`), `<url|text>` for links, `•` for bullets (no `1.` numbered lists), `:emoji:` shortcodes, `>` for quotes, and bold a line instead of using `##` headings.

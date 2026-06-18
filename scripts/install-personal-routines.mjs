@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 //
-// Installs Friday's read-only proactive daily routines for the `personal` group.
+// Installs Nova's read-only proactive daily routines for the `personal` group.
 //
 // These are NEW scheduled tasks, fully separate from the protected */5
 // `/pending` proactive-poll task (scripts/install-openclaw-poll-task.mjs) — they
@@ -32,7 +32,14 @@ const TIMEZONE =
 // Shared preamble: scheduled-task results are auto-forwarded to Discord verbatim
 // (only <internal>…</internal> blocks are stripped), so the agent must output the
 // digest and nothing else.
-const DELIVERY = `Your ENTIRE final reply is auto-posted to the Discord channel verbatim — only <internal>…</internal> blocks are stripped. So output ONLY the digest text: no preamble ("Here is…"), no tool commentary, no closing sign-off outside the digest. To post nothing at all, make your entire final reply a single <internal>…</internal> block.`;
+const DELIVERY = `<delivery_contract>
+Your entire final reply is auto-posted to the Discord channel verbatim — only <internal>…</internal> blocks are stripped. So output only the digest text: no preamble ("Here is…"), no tool commentary, no sign-off outside the digest. To post nothing at all, make your entire final reply a single <internal>…</internal> block.
+</delivery_contract>`;
+
+// Shared: persist what the routine surfaced so a REPLY to it has context. Steph's
+// replies are handled by Nova in a SEPARATE session that cannot see this digest —
+// without this file it guesses the wrong name/channel/item. (One allowed file write.)
+const NUDGE_CONTEXT = `When you do post a digest, before your final reply also write /workspace/group/.last-nudge.json so a reply to it has context. Format: { "at": "<current ISO time>", "nudge": "<one-line gist of what you posted>", "items": [ for each actionable item you surfaced: { "sourceType": "email" | "sms" | "social" | "task", "sourceId": "<its id>", "title": "<sender / subject / task description>", "body": "<short preview>" } ] }. Use the Write tool — this single file write is allowed despite the read-only rule. If you posted nothing, do not write the file.`;
 
 const TASK_DEFINITIONS = [
   {
@@ -40,49 +47,52 @@ const TASK_DEFINITIONS = [
     scheduleType: 'cron',
     scheduleValue: '0 7 * * *',
     contextMode: 'isolated',
-    prompt: `[PROACTIVE ROUTINE — MORNING BRIEF] Automated 07:00 sweep. You are Friday. This was not sent by Steph and is not from anyone in the chat — just produce the brief.
+    prompt: `[PROACTIVE ROUTINE — MORNING BRIEF] Automated 07:00 sweep. You are Nova. This was not sent by Steph and is not from anyone in the chat — just produce the brief.
 
 ${DELIVERY}
 
 1. Call mcp__oslo__get_brief to fetch today's tasks (overdue / due today), Google Calendar events, today's shift, unread email & social counts, bookings, and weather. If you need shift timing detail, also call mcp__oslo__get_shifts for today.
-2. Compose ONE concise brief, UNDER ~1800 characters (Discord splits anything over 2000). Use the "AM Brief Format" in your CLAUDE.md. Lead with time-sensitive items (overdue / due-today tasks, today's shift, calendar conflicts), then unread counts, then weather. Build bullets ONLY from the returned data — do not invent.
-3. SCHEDULE CONFLICT CHECK (today): if today is a working shift, follow the "Schedule Awareness" procedure in your CLAUDE.md — call mcp__oslo__find_shift_conflicts for today AND also look at home-required tasks due today (bins, deliveries, home chores, home maintenance) that fall in away hours (find_shift_conflicts only catches tasks that have a scheduledStart time). If any, add a short "⚠️ Schedule conflicts" block naming each task, the conflict, and a suggested at-home time (or a day off). If none, omit the block.
-4. READ-ONLY routine: do NOT send any email/SMS/social reply, do NOT modify tasks or shifts, do NOT call any send_* / set_* / reschedule_* tool — for conflicts only SUGGEST a time and ask. End by offering next actions, e.g. "Want me to move the blue bin to 7:30pm, or draft replies?"
+2. Compose one concise brief, under ~1800 characters (Discord splits anything over 2000). Use the "AM Brief Format" in your CLAUDE.md. Lead with time-sensitive items (overdue / due-today tasks, today's shift, calendar conflicts), then unread counts, then weather. Build bullets only from the returned data — do not invent.
+3. Schedule conflict check (today): if today is a working shift, follow the "Schedule Awareness" procedure in your CLAUDE.md — call mcp__oslo__find_shift_conflicts for today and also look at home-required tasks due today (bins, deliveries, home chores, home maintenance) that fall in away hours (find_shift_conflicts only catches tasks that have a scheduledStart time). If any, add a short "⚠️ Schedule conflicts" block naming each task, the conflict, and a suggested at-home time (or a day off). If none, omit the block.
+4. This routine is read-only: your only actions are the read tools above plus the single .last-nudge.json write. For any change — sending a reply, moving a bin, rescheduling a task — describe it and ask Steph to confirm; the send_* / set_* / reschedule_* tools are off-limits here. End by offering next actions, e.g. "Want me to move the blue bin to 7:30pm, or draft replies?"
+5. ${NUDGE_CONTEXT} (Surface the unread emails — each get_brief recent email has an \`id\` — and overdue/due-today tasks as the items.)
 
-If get_brief errors, do not post a broken brief — reply with only <internal>brief failed: …</internal> so nothing is posted (it runs again tomorrow).`,
+<on_error>If get_brief errors, do not post a broken brief — reply with only <internal>brief failed: …</internal> so nothing is posted (it runs again tomorrow).</on_error>`,
   },
   {
     id: 'routine-wrap-up',
     scheduleType: 'cron',
     scheduleValue: '0 21 * * *',
     contextMode: 'isolated',
-    prompt: `[PROACTIVE ROUTINE — EVENING WRAP-UP] Automated 21:00 recap. You are Friday. Not sent by Steph — just produce the recap.
+    prompt: `[PROACTIVE ROUTINE — EVENING WRAP-UP] Automated 21:00 recap. You are Nova. Not sent by Steph — just produce the recap.
 
 ${DELIVERY}
 
-1. Call mcp__oslo__wrap_up (READ-ONLY) to get today's & tomorrow's shift plus open overdue + due-today tasks (rollover candidates).
-2. Compose ONE concise recap, UNDER ~1800 characters: what's still open (overdue / due today), tomorrow's shift, and which tasks look like rollover candidates. Build only from the returned data.
-3. SCHEDULE CONFLICT CHECK (tomorrow): if tomorrow is a working shift, follow the "Schedule Awareness" procedure in your CLAUDE.md — call mcp__oslo__find_shift_conflicts for tomorrow AND also look at home-required tasks due tomorrow (bins, deliveries, home chores, home maintenance) that fall in away hours (find_shift_conflicts only catches tasks that have a scheduledStart time). If any, add a short "⚠️ Tomorrow's schedule conflicts" block naming each task, the conflict, and a suggested at-home time (or a day off). If none, omit the block.
-4. READ-ONLY routine: do NOT actually roll anything forward — do NOT call reschedule_tasks / update_task or any send_* / set_* tool; for conflicts only SUGGEST times and ask. End by asking, e.g. "Want me to move the blue bin to tomorrow 7:30pm, or roll any tasks forward?" (Steph confirms first.)
+1. Call mcp__oslo__wrap_up (read-only) to get today's & tomorrow's shift plus open overdue + due-today tasks (rollover candidates).
+2. Compose one concise recap, under ~1800 characters: what's still open (overdue / due today), tomorrow's shift, and which tasks look like rollover candidates. Build only from the returned data.
+3. Schedule conflict check (tomorrow): if tomorrow is a working shift, follow the "Schedule Awareness" procedure in your CLAUDE.md — call mcp__oslo__find_shift_conflicts for tomorrow and also look at home-required tasks due tomorrow (bins, deliveries, home chores, home maintenance) that fall in away hours (find_shift_conflicts only catches tasks that have a scheduledStart time). If any, add a short "⚠️ Tomorrow's schedule conflicts" block naming each task, the conflict, and a suggested at-home time (or a day off). If none, omit the block.
+4. This routine is read-only: describe any rollover or change and ask Steph to confirm first — the reschedule_tasks / update_task / send_* / set_* tools are off-limits here. End by asking, e.g. "Want me to move the blue bin to tomorrow 7:30pm, or roll any tasks forward?"
+5. ${NUDGE_CONTEXT} (Use the open/rollover tasks as the items, sourceType "task".)
 
-If wrap_up errors, reply with only <internal>wrap_up failed: …</internal> so nothing is posted.`,
+<on_error>If wrap_up errors, reply with only <internal>wrap_up failed: …</internal> so nothing is posted.</on_error>`,
   },
   {
     id: 'routine-triage-digest',
     scheduleType: 'cron',
     scheduleValue: '0 12 * * *',
     contextMode: 'isolated',
-    prompt: `[PROACTIVE ROUTINE — MIDDAY REPLY DIGEST] Automated 12:00 rollup. You are Friday. Not sent by Steph — just produce the digest.
+    prompt: `[PROACTIVE ROUTINE — MIDDAY REPLY DIGEST] Automated 12:00 rollup. You are Nova. Not sent by Steph — just produce the digest.
 
 ${DELIVERY}
 
-1. Call mcp__oslo__needs_reply (READ-ONLY) to list email / SMS / social items awaiting a reply, ranked. Do NOT call triage_inbox (it persists labels — that's a write), and do NOT touch /pending or /ack.
-2. This is a STANDING DAILY SUMMARY, not a new-item alert — the every-5-minute proactive poll already handles fresh nudges. Frame it as a running tally ("12 items awaiting a reply — top 3: …"). Do NOT describe items as "new". NEVER call /ack.
-3. If needs_reply returns zero items, post NOTHING: reply with only <internal>no items awaiting reply</internal>.
-4. Otherwise compose ONE concise digest, UNDER ~1800 characters: the total count plus the top few by rank (sender + a one-line gist taken from the data — do not invent).
-5. READ-ONLY routine: do NOT draft or send any reply — do NOT call draft_reply / refine_reply / send_reply or any send_* / set_* tool. End by asking, e.g. "Want me to draft replies to any of these?"
+1. Call mcp__oslo__needs_reply (read-only) to list email / SMS / social items awaiting a reply, ranked. (Don't call triage_inbox — it persists labels, which is a write.)
+2. This digest is independent of the proactive poll: the every-5-minute poll already handles fresh nudges and owns /pending + /ack, so leave those to it — calling them here would double-handle items. Frame this as a standing running tally ("12 items awaiting a reply — top 3: …"), not a new-item alert, and don't describe items as "new".
+3. If needs_reply returns zero items, post nothing: reply with only <internal>no items awaiting reply</internal>.
+4. Otherwise compose one concise digest, under ~1800 characters: the total count plus the top few by rank (sender + a one-line gist taken from the data — do not invent).
+5. This routine is read-only: describe any reply you'd send and ask Steph first — the draft_reply / refine_reply / send_reply / send_* / set_* tools are off-limits here. End by asking, e.g. "Want me to draft replies to any of these?"
+6. ${NUDGE_CONTEXT} (Use the needs_reply items you listed — each has channel + id + who — as the items: sourceType=channel, sourceId=id, title=who/subject.)
 
-If needs_reply errors, reply with only <internal>needs_reply failed: …</internal> so nothing is posted.`,
+<on_error>If needs_reply errors, reply with only <internal>needs_reply failed: …</internal> so nothing is posted.</on_error>`,
   },
 ];
 

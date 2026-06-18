@@ -163,15 +163,11 @@ function createSchema(database: Database.Database): void {
 
   // Add reply context columns if they don't exist (migration for existing DBs)
   try {
-    database.exec(
-      `ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT`,
-    );
+    database.exec(`ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT`);
     database.exec(
       `ALTER TABLE messages ADD COLUMN reply_to_message_content TEXT`,
     );
-    database.exec(
-      `ALTER TABLE messages ADD COLUMN reply_to_sender_name TEXT`,
-    );
+    database.exec(`ALTER TABLE messages ADD COLUMN reply_to_sender_name TEXT`);
   } catch {
     /* columns already exist */
   }
@@ -600,6 +596,23 @@ export function pruneOldTaskRunLogs(olderThanMs: number): number {
     .prepare(`DELETE FROM task_run_logs WHERE run_at < ?`)
     .run(cutoff);
   return info.changes;
+}
+
+/**
+ * Most recent run-log row for a task (for the heartbeat self-monitor).
+ * Uses idx_task_run_logs(task_id, run_at).
+ */
+export function getLastTaskRun(
+  taskId: string,
+): { run_at: string; status: string; error: string | null } | undefined {
+  return db
+    .prepare(
+      `SELECT run_at, status, error FROM task_run_logs
+       WHERE task_id = ? ORDER BY run_at DESC LIMIT 1`,
+    )
+    .get(taskId) as
+    | { run_at: string; status: string; error: string | null }
+    | undefined;
 }
 
 export function logTaskRun(log: TaskRunLog): void {

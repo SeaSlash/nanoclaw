@@ -11,7 +11,7 @@ import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
-  sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMessage: (jid: string, text: string) => Promise<boolean>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -23,6 +23,42 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
+}
+
+// How long a delivery receipt lingers before being pruned. The container polls
+// for it within ~10s, so anything older is an orphan (e.g. a timed-out send).
+const RECEIPT_TTL_MS = 5 * 60 * 1000;
+
+// Write a delivery receipt back to the container that sent an IPC message, so its
+// send_message tool can report real success/failure (the poll acks /pending only
+// on a confirmed send). The container reads /workspace/ipc/sent/<deliveryId>.json
+// which maps to <ipcBase>/<group>/sent/<deliveryId>.json on the host.
+function writeDeliveryReceipt(
+  ipcBaseDir: string,
+  sourceGroup: string,
+  deliveryId: string,
+  ok: boolean,
+): void {
+  try {
+    const sentDir = path.join(ipcBaseDir, sourceGroup, 'sent');
+    fs.mkdirSync(sentDir, { recursive: true });
+    // Prune stale receipts the container never collected.
+    const cutoff = Date.now() - RECEIPT_TTL_MS;
+    for (const f of fs.readdirSync(sentDir)) {
+      const fp = path.join(sentDir, f);
+      try {
+        if (fs.statSync(fp).mtimeMs < cutoff) fs.unlinkSync(fp);
+      } catch {
+        /* best-effort */
+      }
+    }
+    const dst = path.join(sentDir, `${deliveryId}.json`);
+    const tmp = `${dst}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ ok }));
+    fs.renameSync(tmp, dst); // atomic publish
+  } catch (err) {
+    logger.error({ err, deliveryId }, 'Failed to write delivery receipt');
+  }
 }
 
 let ipcWatcherRunning = false;
@@ -77,19 +113,33 @@ export function startIpcWatcher(deps: IpcDeps): void {
               if (data.type === 'message' && data.chatJid && data.text) {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
+                let delivered = false;
                 if (
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  await deps.sendMessage(data.chatJid, data.text);
+                  delivered = await deps.sendMessage(data.chatJid, data.text);
                   logger.info(
-                    { chatJid: data.chatJid, sourceGroup },
+                    { chatJid: data.chatJid, sourceGroup, delivered },
                     'IPC message sent',
                   );
                 } else {
                   logger.warn(
                     { chatJid: data.chatJid, sourceGroup },
                     'Unauthorized IPC message attempt blocked',
+                  );
+                }
+                // Confirm delivery back to the sender (deliveryId is set by the
+                // container's send_message tool; validated as a safe filename).
+                if (
+                  typeof data.deliveryId === 'string' &&
+                  /^[A-Za-z0-9._-]+$/.test(data.deliveryId)
+                ) {
+                  writeDeliveryReceipt(
+                    ipcBaseDir,
+                    sourceGroup,
+                    data.deliveryId,
+                    delivered,
                   );
                 }
               }

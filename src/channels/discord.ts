@@ -319,17 +319,17 @@ export class DiscordChannel implements Channel {
     }
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  async sendMessage(jid: string, text: string): Promise<boolean> {
     if (!this.client) {
       logger.warn('Discord client not initialized');
-      return;
+      return false;
     }
     try {
       const channelId = jid.replace(/^dc:/, '');
       const channel = await this.client.channels.fetch(channelId);
       if (!channel || !('send' in channel)) {
         logger.warn({ jid }, 'Discord channel not found');
-        return;
+        return false;
       }
       const textChannel = channel as TextChannel;
       const lines = text.split('\n');
@@ -394,8 +394,10 @@ export class DiscordChannel implements Channel {
         { jid, length: text.length, attachments: fileAttachments.length },
         'Discord message sent',
       );
+      return true;
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Discord message');
+      return false;
     }
   }
 

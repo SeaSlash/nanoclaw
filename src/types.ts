@@ -91,7 +91,9 @@ export interface TaskRunLog {
 export interface Channel {
   name: string;
   connect(): Promise<void>;
-  sendMessage(jid: string, text: string): Promise<void>;
+  // Returns true if the message was delivered (or there was nothing to deliver),
+  // false if delivery failed. Callers rely on this to avoid acking on a failed send.
+  sendMessage(jid: string, text: string): Promise<boolean>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;

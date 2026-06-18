@@ -35,3 +35,20 @@ export function formatLocalTime(utcIso: string, timezone: string): string {
     hour12: true,
   });
 }
+
+/**
+ * Authoritative weekday + date in a given timezone, e.g. "Thursday, Jun 18, 2026".
+ * Computed deterministically via Intl with an EXPLICIT timeZone so the weekday is
+ * never derived by hand (or by an LLM) and never skewed by the host's system zone.
+ * Falls back to UTC if the timezone is invalid. Accepts a Date or a date string.
+ */
+export function formatLocalDate(when: Date | string, timezone: string): string {
+  const date = typeof when === 'string' ? new Date(when) : when;
+  return date.toLocaleString('en-US', {
+    timeZone: resolveTimezone(timezone),
+    weekday: 'long',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}

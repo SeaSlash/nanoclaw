@@ -64,12 +64,12 @@ Use Slack mrkdwn syntax. Run `/slack-formatting` for the full reference. Key rul
 
 ### WhatsApp/Telegram channels (folder starts with `whatsapp_` or `telegram_`)
 
-- `*bold*` (single asterisks, NEVER **double**)
-- `_italic_` (underscores)
-- `•` bullet points
-- ` ``` ` code blocks
+- Bold: `*single asterisks*` — double asterisks (`**`) render literally here, so use one.
+- Italic: `_underscores_`
+- Bullets: `•`
+- Code: ` ``` ` blocks
 
-No `##` headings. No `[links](url)`. No `**double stars**`.
+Write links as bare URLs, and bold a line instead of using an `##` heading — Markdown `[links](url)` and `##` headings don't render here.
 
 ### Discord channels (folder starts with `discord_`)
 
@@ -89,9 +89,9 @@ For any recurring task, use `schedule_task`. Frequent agent invocations — espe
 4. If `wakeAgent: false` — nothing happens, task waits for next run
 5. If `wakeAgent: true` — you wake up and receive the script's data + prompt
 
-### Always test your script first
+### Test your script before scheduling
 
-Before scheduling, run the script in your sandbox to verify it works:
+Before scheduling, run the script in your sandbox to confirm it prints valid JSON — especially for anything non-trivial or that calls an external API:
 
 ```bash
 bash -c 'node --input-type=module -e "
